@@ -1,0 +1,55 @@
+services:
+  app:
+    build:
+      context: .
+    user: www-data:www-data
+    depends_on:
+      - redis
+    environment:
+      - APP_URL=https://${URL:-demo.restaurant.com}
+      - DB_CONNECTION=mysql
+      - DB_HOST=172.17.0.1
+      - DB_DATABASE=${DATABASE:-tastyigniter}
+      - DB_USERNAME=${USERNAME:-tastyigniter}
+      - DB_PASSWORD=${PASSWORD:-somepassword}
+      - SESSION_DRIVER=redis
+      # - QUEUE_CONNECTION=sync
+      - CACHE_DRIVER=redis
+      - SESSION_LIFETIME=14400
+      - REDIS_HOST=redis
+    expose:
+      - 80
+    ports:
+      - 8080:80
+    volumes:
+      - ./container_data/${CONTAINER_DATA:-${URL:-demo.restaurant.com}}:/var/www/html
+    #  - /var/run/mysqld/mysqld.sock:/var/run/mysqld/mysqld.sock  
+    restart: always
+  # Use --profile setup in docker compose up to set it up. You will need to have mysql-root.txt populated with an admin password of your database server
+  db:
+    profiles:
+      - setup
+    image: mariadb:10.7
+    volumes:
+      - ./db/${COMPOSE_PROJECT_NAME:-tastyigniter}:/var/lib/mysql
+    environment:
+      - MYSQL_RANDOM_ROOT_PASSWORD=yes
+      - MYSQL_DATABASE=${DATABASE:-tastyigniter}
+      - MYSQL_USER=${USERNAME:-tastyigniter}
+      - MYSQL_PASSWORD=${PASSWORD:-somepassword}
+    restart: no
+    # entrypoint: "/bin/bash -c"
+    command: >
+      sh -c "mariadb -h172.17.0.1 -uroot -p$$(cat /run/secrets/mysql-root) --execute \"CREATE DATABASE IF NOT EXISTS $$MYSQL_DATABASE; 
+        CREATE USER IF NOT EXISTS $$MYSQL_USER@'%' IDENTIFIED BY '$$MYSQL_PASSWORD'; 
+        GRANT ALL PRIVILEGES ON $$MYSQL_DATABASE.* TO $$MYSQL_USER@'%'\""
+    secrets:
+      - mysql-root
+  redis:
+    image: redis:8
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: always
+
+secrets:
+  mysql-root:
+    file: ./mysql-root.txt
