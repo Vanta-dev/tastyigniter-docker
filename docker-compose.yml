@@ -1,55 +1,80 @@
+version: "3.8"
+
 services:
-  app:
-    build:
-      context: .
-    user: www-data:www-data
-    depends_on:
-      - redis
-    environment:
-      - APP_URL=https://${URL:-demo.restaurant.com}
-      - DB_CONNECTION=mysql
-      - DB_HOST=172.17.0.1
-      - DB_DATABASE=${DATABASE:-tastyigniter}
-      - DB_USERNAME=${USERNAME:-tastyigniter}
-      - DB_PASSWORD=${PASSWORD:-somepassword}
-      - SESSION_DRIVER=redis
-      # - QUEUE_CONNECTION=sync
-      - CACHE_DRIVER=redis
-      - SESSION_LIFETIME=14400
-      - REDIS_HOST=redis
-    expose:
-      - 80
-    ports:
-      - 8080:80
-    volumes:
-      - ./container_data/${CONTAINER_DATA:-${URL:-demo.restaurant.com}}:/var/www/html
-    #  - /var/run/mysqld/mysqld.sock:/var/run/mysqld/mysqld.sock  
-    restart: always
-  # Use --profile setup in docker compose up to set it up. You will need to have mysql-root.txt populated with an admin password of your database server
   db:
-    profiles:
-      - setup
-    image: mariadb:10.7
-    volumes:
-      - ./db/${COMPOSE_PROJECT_NAME:-tastyigniter}:/var/lib/mysql
-    environment:
-      - MYSQL_RANDOM_ROOT_PASSWORD=yes
-      - MYSQL_DATABASE=${DATABASE:-tastyigniter}
-      - MYSQL_USER=${USERNAME:-tastyigniter}
-      - MYSQL_PASSWORD=${PASSWORD:-somepassword}
-    restart: no
-    # entrypoint: "/bin/bash -c"
+    image: mysql:8.0
     command: >
-      sh -c "mariadb -h172.17.0.1 -uroot -p$$(cat /run/secrets/mysql-root) --execute \"CREATE DATABASE IF NOT EXISTS $$MYSQL_DATABASE; 
-        CREATE USER IF NOT EXISTS $$MYSQL_USER@'%' IDENTIFIED BY '$$MYSQL_PASSWORD'; 
-        GRANT ALL PRIVILEGES ON $$MYSQL_DATABASE.* TO $$MYSQL_USER@'%'\""
-    secrets:
-      - mysql-root
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    environment:
+      - MYSQL_DATABASE=${SERVICE_DB_NAME_TASTYIGNITER}
+      - MYSQL_USER=${SERVICE_USER_TASTYIGNITER}
+      - MYSQL_PASSWORD=${SERVICE_PASSWORD_TASTYIGNITER}
+      - MYSQL_ROOT_PASSWORD=${SERVICE_PASSWORD_TASTYIGNITER_ROOT}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   redis:
     image: redis:8
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
-    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
 
-secrets:
-  mysql-root:
-    file: ./mysql-root.txt
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: www-data:www-data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # FQDN público (Coolify lo inyecta)
+      - APP_URL=${SERVICE_URL_TASTYIGNITER}
+
+      # Base de datos (host = nombre del servicio)
+      - DB_CONNECTION=mysql
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_DATABASE=${SERVICE_DB_NAME_TASTYIGNITER}
+      - DB_USERNAME=${SERVICE_USER_TASTYIGNITER}
+      - DB_PASSWORD=${SERVICE_PASSWORD_TASTYIGNITER}
+
+      # Redis para sesión/cache
+      - CACHE_DRIVER=redis
+      - SESSION_DRIVER=redis
+      - SESSION_LIFETIME=14400
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
+      # Colas (puedes cambiar a database/redis luego)
+      - QUEUE_CONNECTION=sync
+    volumes:
+      # Persiste /var/www/html (extensiones, temas, uploads)
+      - ti-app:/var/www/html
+    expose:
+      - "80"
+    healthcheck:
+      # La app responde en /
+      test: ["CMD-SHELL", "curl -fsS http://localhost/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  ti-app:
